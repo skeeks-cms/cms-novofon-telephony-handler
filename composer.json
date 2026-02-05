@@ -1,5 +1,5 @@
 {
-	"name": "skeeks/cms-novofon-sms-handler",
+	"name": "skeeks/cms-novofon-telephony-handler",
 	"description": "Sms провайдер SkeekS CMS",
 	"keywords": ["yii", "skeeks", "framework", "component", "dadata", "suggest"],
     "homepage": "https://cms.skeeks.com/",
