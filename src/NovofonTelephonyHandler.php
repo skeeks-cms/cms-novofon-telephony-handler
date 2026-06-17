@@ -84,92 +84,96 @@ class NovofonTelephonyHandler extends TelephonyHandler
 
 
     /**
-     * Нормализация webhook Sipuni
+     * Нормализация webhook Novofon
      */
     public function normalizeWebhook(array $payload): array
     {
         /**
          * 1. ID звонка у провайдера
          */
-        $providerCallId = $payload['call_id'] ?? null;
+        $providerCallId = $payload['pbx_call_id'] ?? null;
 
         /**
          * 2. Направление звонка
-         * Sipuni присылает treeName: "Исходящая" / "Входящая"
          */
-        $direction = ($payload['treeName'] ?? '') === 'Исходящая'
+        $event = $payload['event'] ?? '';
+        $direction = str_contains($event, 'OUT')
             ? 'out'
             : 'in';
 
         /**
-         * 3. Определяем номера
+         * 3. Номера
          */
-        if ($direction === 'out') {
-            // исходящий
-            $phoneFrom = $payload['short_src_num']
-                ?? $payload['src_num']
-                ?? null;
+        $phoneFrom = $payload['caller_id'] ?? null;
+        $phoneTo   = $payload['destination'] ?? null;
 
-            $phoneTo = $payload['pbxdstnum']
-                ?? $payload['dst_num']
-                ?? null;
-        } else {
-            // входящий
-            $phoneFrom = $payload['src_num']
-                ?? null;
+        /**
+         * ===== СТАТУС =====
+         */
+        switch ($event) {
 
-            $phoneTo = $payload['dst_num']
-                ?? null;
+            case 'NOTIFY_OUT_START':
+            case 'NOTIFY_INTERNAL':
+            case 'NOTIFY_START':
+                $status = CmsTelephonyCall::STATUS_RINGING;
+                break;
+
+            case 'NOTIFY_ANSWER':
+                $status = CmsTelephonyCall::STATUS_ANSWER;
+                break;
+
+            case 'NOTIFY_OUT_END':
+                if (($payload['disposition'] ?? '') === 'answered') {
+                    $status = STATUS_ENDED;
+                    $endReason = null;
+                } else {
+                    $status = STATUS_FAILED;
+                    $endReason = CmsTelephonyCall::END_REASON_NOANSWER;
+                }
+                break;
+
+            default:
+                $status = CmsTelephonyCall::STATUS_RINGING;
         }
 
         /**
-         * 4. Статус звонка
+         * 5. Время начала
          */
-        $status = match ($payload['status'] ?? null) {
-            StringHelper::strtoupper(CmsTelephonyCall::STATUS_ANSWER) => CmsTelephonyCall::STATUS_ANSWER,
-            StringHelper::strtoupper(CmsTelephonyCall::STATUS_BUSY) => CmsTelephonyCall::STATUS_BUSY,
-            StringHelper::strtoupper(CmsTelephonyCall::STATUS_NOANSWER) => CmsTelephonyCall::STATUS_NOANSWER,
-            StringHelper::strtoupper(CmsTelephonyCall::STATUS_CANCEL) => CmsTelephonyCall::STATUS_CANCEL,
-            StringHelper::strtoupper(CmsTelephonyCall::STATUS_CONGESTION) => CmsTelephonyCall::STATUS_CONGESTION,
-            StringHelper::strtoupper(CmsTelephonyCall::STATUS_CHANUNAVAIL) => CmsTelephonyCall::STATUS_CHANUNAVAIL,
-            default    => CmsTelephonyCall::STATUS_RINGING,
-        };
+        $startedAt = null;
+        if (!empty($payload['call_start'])) {
+            $startedAt = strtotime($payload['call_start']);
+        }
 
         /**
-         * 5. Время начала / окончания
+         * 6. Время окончания
          */
-        $startedAt = isset($payload['call_start_timestamp'])
-            ? (int)$payload['call_start_timestamp']
-            : null;
-
-        $endedAt = isset($payload['timestamp'])
-            ? (int)$payload['timestamp']
-            : null;
+        $endedAt = null;
+        if (str_ends_with($event, '_END')) {
+            $endedAt = time();
+        }
 
         /**
-         * 6. Длительность
+         * 7. Длительность
          */
-        $duration = isset($payload['billsec'])
-            ? (int)$payload['billsec']
+        $duration = isset($payload['duration'])
+            ? (int)$payload['duration']
             : 0;
 
         /**
-         * 7. Запись разговора
+         * 8. Запись разговора
          */
-        $recordUrl = $payload['call_record_link'] ?? null;
+        $recordUrl = null;
+        if (!empty($payload['call_id_with_rec'])) {
+            $recordUrl = $this->buildRecordUrl($payload['call_id_with_rec']);
+        }
 
         /**
-         * 8. Внутренний номер сотрудника (extension)
-         *
-         * - исходящий: short_src_num
-         * - входящий: last_called
+         * 9. Внутренний номер сотрудника
          */
-        $workerExt = $payload['short_src_num']
-            ?? $payload['last_called']
-            ?? null;
+        $workerExt = $payload['internal'] ?? null;
 
         /**
-         * 9. Финальный нормализованный массив
+         * 10. Финальный массив
          */
         return [
             'provider_call_id' => $providerCallId,
@@ -184,12 +188,13 @@ class NovofonTelephonyHandler extends TelephonyHandler
             'started_at'  => $startedAt,
             'ended_at'    => $endedAt,
 
-            'provider_user_num'  => $workerExt,
+            'provider_user_num' => $workerExt,
 
             'record_url'  => $recordUrl,
 
-            // всегда сохраняем сырьё
             'provider_data' => $payload,
         ];
     }
+
+
 }
